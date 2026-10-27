@@ -1,6 +1,6 @@
 # 当前角色的 H3 双视角视频
 
-使用本机已安装的 ComfyUI 原生 H3 节点与已下载模型，生成“下蹲蓄力、小步前探格挡、转髋直拳、提膝平衡、落脚回位”的八秒连续动作。
+使用本机已安装的 ComfyUI 原生 H3 节点与已下载模型，配置“下蹲蓄力、小步前探格挡、转髋直拳、提膝平衡、落脚站稳”的八秒连续动作，优先保持关节、轮廓和接触关系清楚。当前优化版尚未生成视频。
 
 ## 文件与使用
 
@@ -16,10 +16,10 @@
 
 ```powershell
 Set-Location F:\AI_Pipeline\Tools\ComfyUI
-& F:\AI_Pipeline\Envs\comfyui\python.exe -X utf8 -u main.py --listen 127.0.0.1 --port 8188 --disable-auto-launch --disable-all-custom-nodes --disable-partner-nodes --reserve-vram 2 --cache-none --output-directory F:\AI_Pipeline\Outputs
+& F:\AI_Pipeline\Envs\comfyui\python.exe -X utf8 -u main.py --listen 127.0.0.1 --port 8188 --disable-auto-launch --disable-all-custom-nodes --disable-partner-nodes --reserve-vram 2 --cache-ram 4 --output-directory F:\AI_Pipeline\Outputs
 ```
 
-这些启动参数只作用于本次服务，不修改已有启动器；工作流本身只依赖原生节点。
+这是优化版下次启动使用的参数，工作流本身只依赖原生节点。`--cache-ram 4` 启用按内存压力管理的节点缓存，活动缓存保留约 4 GB 系统可用内存余量；它不是固定 4 GB 缓存大小。未变化的输入和编码可复用，修改提示词会使对应编码重新执行。本轮没有重启服务，已运行的 `--cache-none` 进程不会因修改文档自动切换配置。批量任务串行排队，视频生成与关节训练错开，整批结束后再释放模型及缓存。
 
 ## 运行后释放资源
 
@@ -45,11 +45,11 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8188/free' -Method Post -ContentType 'a
 | 主模型 | `minimax_h3_fl2va_pruned_w6a8.safetensors` |
 | 文本与图像编码器 | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`，类型 `minimax` |
 | 视频 VAE | `minimax_h3_video_vae_int8_convrot.safetensors` |
-| 音频 VAE | `minimax_h3_audio_vae_fp32.safetensors` |
+| 音频输出 | 不加载音频 VAE，不解码或保存音轨；H3 内部联合采样仍保留 |
 | 输出 | 1024×576，24 fps，192 帧，即 8 秒 |
-| 采样 | `res_multistep` + `simple`，20 步，denoise 1，BasicGuider（CFG 1） |
+| 采样 | `res_multistep` + `simple`，16 步，denoise 1，BasicGuider（CFG 1） |
 | 种子 | 2026102701，固定 |
-| 首尾帧 | 同一张双视角标定渲染图 |
+| 图像约束 | 仅连接现有标定首帧，尾帧留空，动作结束时保持自然护卫 |
 | 视频解码 | 原生分块解码，512 像素空间块、64 帧时间块 |
 | 保存 | MP4 / H.264，CRF 18 |
 
@@ -57,13 +57,21 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8188/free' -Method Post -ContentType 'a
 
 ## 视角与关节对应
 
-骨架、首帧和相机均来自当前训练工作包。左栏是从世界坐标 -Y 方向观察的正面机位；右栏相机位于 +X，观察的是角色的**解剖学左侧**，起始人物朝画面左方。“右栏”不是“人物右侧”。两相机等高、等比例、相差九十度；首尾输入天然属于同一副骨架。
+骨架、首帧和相机均来自当前训练工作包。左栏是从世界坐标 -Y 方向观察的正面机位；右栏相机位于 +X，观察的是角色的**解剖学左侧**，起始人物朝画面左方。“右栏”不是“人物右侧”。两相机等高、等比例、相差九十度；首帧中的两个视角来自同一副骨架。
 
-提示词明确两栏共享同一动作时钟，角色自身左右身份不变，各动作极值及落脚同时发生，对应关节保持相同竖直高度。整段只有一个固定机位镜头，并在结尾回到起始姿势。
+提示词明确两栏共享同一动作时钟，角色自身左右身份不变，各动作极值及落脚同时发生，对应关节保持相同竖直高度。整段只有一个固定机位镜头，明确每一阶段的支撑脚、转髋、膝肘方向和落脚接触；结尾站稳并保持护卫，不强制回到最初的静止站姿。
 
-首尾帧锚定和文字约束不能把 H3 的中间帧变成严格三维投影。若需要逐帧严格同骨架，应使用同一三维动作的双视角渲染或逐帧控制；当前流程的中间帧同步程度需要看生成结果。
+首帧锚定和文字约束不能把 H3 的中间帧变成严格三维投影。若需要逐帧严格同骨架，应使用同一三维动作的双视角渲染或逐帧控制；当前流程的中间帧同步程度需要看生成结果。
 
-本机试跑已完成：RTX 3090，1024×576、192 帧、24 fps，端到端约 14 分 10 秒。抽查 0～8 秒关键画面，固定分栏与机位保持，出拳、提膝、回位基本同步；中间帧仍有少量关节位置偏差。视频文件为 `H3_ComplexAction_00001_.mp4`，本地查看图位于 `work/MedievalGirlTraining/Review/H3_ComplexAction.png`。
+历史基线试跑（优化前，20 步、同图首尾约束、有音轨）已完成：RTX 3090，1024×576、192 帧、24 fps，端到端约 14 分 10 秒。抽查 0～8 秒关键画面，固定分栏与机位保持，出拳、提膝、回位基本同步；中间帧仍有少量关节位置偏差。视频文件为 `H3_ComplexAction_00001_.mp4`，本地查看图位于 `work/MedievalGirlTraining/Review/H3_ComplexAction.png`。
+
+## 本轮调整边界
+
+采样由 20 步降为 16 步，保留 `res_multistep`、`simple`、固定种子和完整八秒组合。去掉音频 VAE 与解码节点，只节省音频后处理开销，不代表 H3 采样变为纯视频模型。
+
+提示词沿用训练角色的比例、服装轮廓和配饰位置，强调均匀背景、全身清晰、左右身份、落脚接触及两视角同步。现有首图与 `cameras.json` 配套，保持原分辨率和构图，不拉伸、裁切或改变人物占幅；重新构图或更换动作首帧应配套重新渲染并核对标定，本轮不生成图片。
+
+不添加放大、插帧、实验性注意力、Turbo LoRA、多帧参考或新的识别器配置；它们分别需要额外验证、模型或训练。本轮仅修改工作流与说明，未提交生成任务；优化版的速度和动作质量尚未实测。以上历史视频仅用于基线比较，不代表当前参数效果。
 
 ## 官方依据
 
