@@ -1,0 +1,10 @@
+{
+  "id": "HighBlock",
+  "start": "GuardLeftReady",
+  "end": "GuardLeftReady",
+  "category": "short",
+  "seconds": 1.63,
+  "root_motion": "in_place",
+  "motion": "角色从左脚稍前的战斗护卫姿势开始，快速完成一次左前臂向外上方的格挡，随后收回同一护卫。右手自然保持防护，身体随格挡轻微转动并保持平衡。",
+  "rhythm": "开始即感知来袭并迅速抬臂，前半段完成有力量的格挡，短促接触后顺势回收。后半段恢复护卫与平衡，动作紧凑连续，结束时准备衔接下一招。"
+}

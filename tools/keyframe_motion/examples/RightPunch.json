@@ -1,0 +1,10 @@
+{
+  "id": "RightPunch",
+  "start": "GuardLeftReady",
+  "end": "GuardLeftReady",
+  "category": "short",
+  "seconds": 2.33,
+  "root_motion": "in_place",
+  "motion": "角色从左脚稍前的战斗护卫姿势开始，完成一次迅速有力的右手直拳，随后自然收回同一护卫姿势。",
+  "rhythm": "开头短促蓄力，约前半秒内进入攻击；蹬地转髋带动直拳快速击出，在约一秒之前完成击打，随即收拳。后半段顺势吸收惯性并恢复平衡，结束时保持可以衔接下一招的护卫。蓄力紧凑、击打迅速、回收利落，伸拳极值不停成展示姿势。"
+}

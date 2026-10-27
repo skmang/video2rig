@@ -2,7 +2,9 @@
 
 本 fork 的人形输入处理、训练样图审阅与 H3 本地模型下载，见 [中文工作流](tools/humanoid_inputs/README.zh-CN.md)。原版核心代码保持不变；新增脚本不提供逐指动作识别。
 
-当前角色的 MiniMax H3 双视角视频工作流和中文动作提示词，见 [H3 视频生成](workflows/minimax_h3/README.zh-CN.md)。
+后续动作使用 [关键姿势生产规范](docs/MOTION-KEYFRAMES.zh-CN.md) 和 [姿势捕获、渲染、动作包与原骨架回传工具](tools/keyframe_motion/README.zh-CN.md)。短动作 1～3 秒，长动作 3～5 秒，由动作首尾姿势驱动。
+
+已跑过的八秒 MiniMax H3 工作流及结果保留为 [历史对照](workflows/minimax_h3/README.zh-CN.md)，不是后续动作的默认生产入口。
 
 Turn an AI video of **your own 3D model** into an animation of **your own rig** in Blender.
 
