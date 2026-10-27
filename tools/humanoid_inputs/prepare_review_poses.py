@@ -1,12 +1,18 @@
-"""为该人形准备少量审阅输入；调用原版采样/姿态编码，不修改第三方源码。"""
+"""准备人形审阅或完整训练姿态；调用原版采样/姿态编码，不修改核心源码。"""
+import argparse
 import json
 from pathlib import Path
 import sys
 import numpy as np
 
-if len(sys.argv) != 2:
-    raise SystemExit('Usage: python ' + Path(__file__).name + ' PROJECT')
-ROOT = Path(sys.argv[1]).resolve()
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('project', type=Path)
+parser.add_argument('--poses', type=int, default=24)
+parser.add_argument('--seed', type=int, default=20261027)
+args = parser.parse_args()
+if args.poses < 24:
+    parser.error('--poses must be at least 24')
+ROOT = args.project.resolve()
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from video2rig.common import Project
 from video2rig.creature import Creature
@@ -66,7 +72,7 @@ cr = HumanoidInput(pr, pr.clip_cfg(''))
 rig = cr.rig
 assert len(cr.legs) == 8
 lo, hi, p0 = cr.bounds(None)
-raw = sample(cr, 192, seed=20261027)
+raw = sample(cr, max(192, args.poses * 2), seed=args.seed, log=lambda m: print(m, flush=True))
 ids = {n: rig.names.index(n) for n in rig.names}
 accepted, rejected = [], {}
 cameras = json.loads((ROOT / 'start' / 'cameras.json').read_text(encoding='utf-8'))
@@ -107,7 +113,9 @@ for i, p in enumerate(raw):
         rejected[why] = rejected.get(why, 0) + 1
     else:
         accepted.append(i)
-assert len(accepted) >= 23, f'Only {len(accepted)} usable candidates'
+    if (i + 1) % 500 == 0:
+        print(f'FILTER {i + 1}/{len(raw)} accepted={len(accepted)}', flush=True)
+assert len(accepted) >= args.poses - 1, f'Only {len(accepted)} usable candidates'
 # 从有效姿态中按主要关节角度距离选出差异化样本，不使用图片好坏挑选。
 cols = [k for j, a in rig.channels for k in [rig.index(rig.names[j], a)] if rig.names[j].startswith(('thigh_', 'calf_', 'upperarm_', 'lowerarm_', 'spine_'))]
 features = (raw[accepted][:, cols] - p0[cols]) / np.maximum(hi[cols] - lo[cols], .01)
@@ -115,7 +123,9 @@ chosen = []
 amplitude = np.sum(features ** 2, axis=1)
 rank = np.argsort(amplitude)
 groups = [rank[:int(.35 * len(rank))], rank[int(.35 * len(rank)):int(.75 * len(rank))], rank[int(.75 * len(rank)):]]
-for group, count in zip(groups, (8, 8, 7)):
+counts = (8, 8, 7) if args.poses == 24 else ((args.poses - 1) // 3, (args.poses - 1) // 3, (args.poses - 1) - 2 * ((args.poses - 1) // 3))
+for group, count in zip(groups, counts):
+    assert len(group) >= count, 'Not enough candidates in an amplitude group'
     local_features = features[group]
     dist = np.sum((local_features - np.median(local_features, axis=0)) ** 2, axis=1)
     for _ in range(count):
@@ -124,14 +134,31 @@ for group, count in zip(groups, (8, 8, 7)):
         dist[k] = -1
 params = np.vstack([p0, raw[chosen]])
 # 温和档贴地，避免把腾空的平移增强误看作站姿质量；中、大幅保留原版的动态空间覆盖。
-for p in params[1:9]:
+for p in params[1:1 + counts[0]]:
     mesh = rig.skin(p, cr.mesh['coords'], cr.idx, cr.wts)
     p[:3] += cr.up * (cr.floor - float((mesh @ cr.up).min()))
+# 接地修正后重新核对安全边界，避免采样时通过、写出后越界。
+assert not any(rejection(p) for p in params), 'A selected pose became invalid after grounding'
+categories = np.array(['start_pose'] + ['mild_grounded'] * counts[0] + ['medium'] * counts[1] + ['wide'] * counts[2])
+# 原版保留末尾 5% 作验证；打散幅度档，使验证集不只含最后一档。
+if args.poses > 24:
+    permutation = np.concatenate(([0], np.random.default_rng(args.seed + 1).permutation(np.arange(1, len(params)))))
+    params, categories = params[permutation], categories[permutation]
 quats, locations = pose_basis_batch(rig, params, {})
 out = ROOT / 'reader'
 out.mkdir(exist_ok=True)
-np.savez_compressed(out / 'poses.npz', bones=np.array(rig.names), root=rig.names[rig.root], quats=quats, root_location=locations, params=params, seed=20261027, prop_names=np.array([], dtype=str), prop_mats=prop_matrices(rig, params))
+np.savez_compressed(out / 'poses.npz', bones=np.array(rig.names), root=rig.names[rig.root], quats=quats, root_location=locations, params=params, categories=categories, seed=args.seed, prop_names=np.array([], dtype=str), prop_mats=prop_matrices(rig, params))
 limits = {n: [{'axis': a, 'role': cr.role[j, a], 'lower_deg': round(float(np.degrees(lo[k])), 3), 'upper_deg': round(float(np.degrees(hi[k])), 3)} for a, k in rig.chan_of[j]] for j, n in enumerate(rig.names) if j in rig.chan_of and j != rig.root}
-record = {'stage': 'awaiting_user_image_review_not_trained', 'candidate_count': len(raw), 'accepted_count': len(accepted), 'rejected': rejected, 'selected_source_indices': [-1] + chosen, 'review_poses': len(params), 'amplitude_groups': {'start_pose': [1], 'mild_grounded': list(range(2, 10)), 'medium': list(range(10, 18)), 'wide': list(range(18, 25))}, 'sharp_only_for_review': True, 'limb_chains': [[rig.names[j] for j in ch] for ch in cr.limb_chains(True)], 'standing_legs': [rig.names[j] for j in sorted(cr.legs)], 'limits_deg': limits, 'coverage_note': '24 张为输入与关节约束审阅样本，不代表完整动作类别覆盖。后续扩充须沿用此输入范围，不能直接用 prepare 的默认 poses 重新覆盖。'}
+record = {
+    'stage': 'review_poses' if args.poses == 24 else 'training_poses_ready',
+    'seed': args.seed, 'candidate_count': len(raw), 'accepted_count': len(accepted),
+    'rejected': rejected, 'selected_source_indices': [-1] + chosen, 'pose_count': len(params),
+    'amplitude_groups': {name: (np.flatnonzero(categories == name) + 1).tolist() for name in np.unique(categories)},
+    'limb_chains': [[rig.names[j] for j in ch] for ch in cr.limb_chains(True)],
+    'standing_legs': [rig.names[j] for j in sorted(cr.legs)], 'limits_deg': limits,
+    'coverage_note': '沿用已确认的人形输入约束；清晰渲染作为基础，训练时由原版执行颜色、噪声、分辨率和模糊增强。',
+}
+if args.poses > 24:
+    record['selected_source_indices'] = np.array([-1] + chosen)[permutation].tolist()
 (ROOT / 'Input' / 'sampling.json').write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-print(json.dumps({k: v for k, v in record.items() if k != 'limits_deg'}, ensure_ascii=False), flush=True)
+print(json.dumps({k: v for k, v in record.items() if k not in ('limits_deg', 'selected_source_indices', 'amplitude_groups')}, ensure_ascii=False), flush=True)
