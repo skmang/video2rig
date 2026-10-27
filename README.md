@@ -2,6 +2,8 @@
 
 本 fork 的人形输入处理、训练样图审阅与 H3 本地模型下载，见 [中文工作流](tools/humanoid_inputs/README.zh-CN.md)。原版核心代码保持不变；新增脚本不提供逐指动作识别。
 
+当前角色的 MiniMax H3 双视角视频工作流和中文动作提示词，见 [H3 视频生成](workflows/minimax_h3/README.zh-CN.md)。
+
 Turn an AI video of **your own 3D model** into an animation of **your own rig** in Blender.
 
 ![A boss's start picture animated by an AI video generator, and the same move on its own rig](docs/images/fit-over-video.jpg)
