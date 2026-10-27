@@ -14,3 +14,29 @@ dev/bench/.depth-helper/
 # the tutorial's Python environment and a texture Blender writes next to the scripts
 .venv/
 waveletNoiseTile.bin
+# Local model weights, downloads and private character assets
+/models/
+/downloads/
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.blend
+*.blend[0-9]*
+*.fbx
+*.glb
+*.gltf
+*.npy
+*.part
+*.download
+*.segment-*
+*.log
+# Local credentials and machine-specific environments
+.env
+.env.local
+.byteplus-key
+venv/
+node_modules/
+Thumbs.db

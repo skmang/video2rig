@@ -1,0 +1,12 @@
+{
+  "name": "HumanoidReview",
+  "root_bone": "pelvis",
+  "facing": "-Y",
+  "leg_limits": true,
+  "hinges": {
+    "calf_l": "back",
+    "calf_r": "back",
+    "lowerarm_l": "front",
+    "lowerarm_r": "front"
+  }
+}

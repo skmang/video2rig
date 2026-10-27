@@ -1,5 +1,7 @@
 # video2rig
 
+本 fork 的人形输入处理、训练样图审阅与 H3 本地模型下载，见 [中文工作流](tools/humanoid_inputs/README.zh-CN.md)。原版核心代码保持不变；新增脚本不提供逐指动作识别。
+
 Turn an AI video of **your own 3D model** into an animation of **your own rig** in Blender.
 
 ![A boss's start picture animated by an AI video generator, and the same move on its own rig](docs/images/fit-over-video.jpg)
