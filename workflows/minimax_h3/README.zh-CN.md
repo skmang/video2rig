@@ -21,6 +21,23 @@ Set-Location F:\AI_Pipeline\Tools\ComfyUI
 
 这些启动参数只作用于本次服务，不修改已有启动器；工作流本身只依赖原生节点。
 
+## 运行后释放资源
+
+只需释放模型与缓存时，使用 ComfyUI 原生 `/free` 接口，服务继续保留。先读取队列，确认没有运行或等待任务：
+
+```powershell
+$q = Invoke-RestMethod 'http://127.0.0.1:8188/queue'
+$q | ConvertTo-Json -Depth 4
+```
+
+确认 `queue_running` 和 `queue_pending` 都为空后，单独执行：
+
+```powershell
+Invoke-RestMethod -Uri 'http://127.0.0.1:8188/free' -Method Post -ContentType 'application/json' -Body '{"unload_models":true,"free_memory":true}'
+```
+
+接口只设置后台释放标志，返回成功不代表释放已完成。稍候再读取 `/system_stats`，检查 `devices` 中的 `torch_vram_total`，并确认服务仍可响应。系统总显存还包含其它程序的占用，不应要求它归零；暂未释放时先确认后台处理状态，不直接终止或重启服务。释放、停止、启动和 Git 操作分别执行，不放在同一条复合命令中。
+
 ## 已配置参数
 
 | 项目 | 设置 |
