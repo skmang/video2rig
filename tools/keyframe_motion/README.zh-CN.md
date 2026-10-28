@@ -1,6 +1,6 @@
 # 关键姿势与动作准备工具
 
-执行 [动作生产规范](../../docs/MOTION-KEYFRAMES.zh-CN.md)。这是原版之外的输入和输出工具，不修改核心、不提供界面、不调用视频生成接口。依赖复用 Blender 的 Python/numpy，以及原 video2rig 环境的 numpy/scipy。
+项目制作与验收规则由 gameart 的 `Docs/Workflows/KeyframeMotion.md` 维护；本仓库的 [技术约定](../../docs/MOTION-KEYFRAMES.zh-CN.md) 负责帧数、输入接口及能力边界。这是原版之外的输入和输出工具，不修改核心、不提供界面、不调用视频生成接口。依赖复用 Blender 的 Python/numpy，以及原 video2rig 环境的 numpy/scipy。
 
 ## 已有入口
 
@@ -11,7 +11,8 @@
 | `render` | 使用基准相机渲染单姿势正侧面 PNG，不随姿势重新取景 |
 | `materialize` | 将共享姿势应用到处理骨架，另存可编辑/可用于训练的 Blender 源 |
 | `transfer` | 把共享姿势或原版拟合 NPZ 按静止矩阵转回原骨架，保存 Blender Action |
-| `motion.py prepare` | 生成独立动作包、首尾图、配套起始骨架和 H3 工作流；不排队 |
+| `motion.py prepare` | 准备动作输入、配套起始骨架、提示词与参数；引用共享工作流，不排队 |
+| `motion.py request` | 把指定动作参数填入共享 API 图，输出一次性请求；不排队、不保存工作流副本 |
 | `motion.py join` | 检查共享边界合同；提供两条实际 NPZ 后报告位置、旋转和速度差 |
 
 当前骨轴转换支持本项目已记录的同名、同层级骨架；被移除的骨必须是原处理记录中的无权重叶骨。不是任意角色的自动重定向。写入目标骨架不能带驱动或约束；有控制器的制作源可先捕获其求值姿势，再应用到无约束的处理副本。NPZ 回传目前拒绝带独立道具轨道的动画，不静默丢弃道具。
@@ -40,9 +41,30 @@ python tools/keyframe_motion/motion.py prepare LIB tools/keyframe_motion/example
 
 动作合同示例：[直拳](examples/RightPunch.json)、[高位格挡](examples/HighBlock.json)。两者共享 `GuardLeftReady`，实际片长分别为 56/24≈2.33 秒、39/24≈1.63 秒。模型原生帧数匹配最近合法值，不通过改播放速度或补帧达到时长。
 
-## 动作包与生成
+## 一套共享工作流与动作参数
 
-`LIB/jobs/<动作ID>/` 内的 `workflow.json` 可导入现有 ComfyUI，`workflow.api.json` 是同参数 API 版。先把 `comfy-input/` 的 PNG 安装到 ComfyUI input（或在 prepare 时指定该目录），再由明确的生成操作执行。默认使用现有 W6A8 H3、16 步、1024×576、24 fps、首尾帧约束；没有放大、插帧或音频解码。
+只维护 `workflows/keyframes/Action.workflow.json` 一套界面节点图及同图的 `Action.api.json`。界面版可导入 ComfyUI，默认展示直拳样例；切换动作修改首尾图片、提示词、帧数、步数、种子和输出前缀，不另存动作工作流。API 版由下列命令自动填参，批量任务逐个传入动作包即可，所有动作复用同一图：
+
+```powershell
+python tools/keyframe_motion/motion.py request LIB/jobs/RightPunch
+# 可选 --out <不存在的请求文件.json>；仅导出一次性请求，不提交队列。
+```
+
+`request` 的标准输出为完整 API JSON，实际帧数与时长写到标准错误；可供获授权的执行器直接读取，无需落盘。界面手动操作时，节点输入应与该请求一致，包括工具计算的合法帧数和带实际时间的完整提示词。请求文件是一次执行的材料，不作为第二份长期维护的工作流。
+
+每个动作包只维护以下数据，修改参数后再次执行 `request` 即生效：
+
+| 文件 | 用途 |
+| --- | --- |
+| `parameters.json` | 当前图像名、短长类别、目标时长、分辨率、步数、种子和输出前缀 |
+| `prompt.txt` | 当前动作与节奏正文；请求时自动补充实际片长、尾帧时间和输入图对应关系 |
+| `action.json` | 准备时的动作合同和首尾姿势 ID；保留起始依据，不覆盖当前参数或提示词 |
+| `prepared.json` | 角色和首尾指纹、来源、共享模板的相对路径及识别器准备状态 |
+| `start/`、`rig/`、`comfy-input/` | 首尾图、相机和起始骨架，以及供 ComfyUI 加载的输入图 |
+
+只改节奏、时长或采样参数时编辑当前 `prompt.txt` 与 `parameters.json`，不重建角色和姿势库；目标时长变化后须核对正文中的节奏时间。换首尾姿势时重新准备配套动作包，不能只改图片而沿用旧 `rig.json`。分辨率保持标定比例，输入图须与包内首尾图一致。
+
+先把 `comfy-input/` 的 PNG 安装到现有 ComfyUI input（或在 prepare 时指定该目录），再由明确的生成操作执行。模型与节点默认值只在共享图维护；当前默认 W6A8 H3、16 步、1024×576、24 fps、首尾帧约束，无放大、插帧或音频解码。变更共享图时同步界面/API 格式与安装副本，并核对现有动作参数；仅改动作时不改图结构。
 
 包内 `rig/rig.json` 的 `start_pose` 和物体变换来自实际首姿势，`start/start.png`、`start/end.png`、`start/cameras.json` 与其配套。中间姿势暂不接入；合同含额外字段时会报错，避免写了中间约束却实际没有使用。
 
@@ -82,8 +104,8 @@ python tools/keyframe_motion/motion.py join LIB/jobs/RightPunch LIB/jobs/HighBlo
 
 ## 当前本机样例
 
-本地姿势与角色文件位于 `work/MedievalGirlKeyframes/`，不随 Git 分发。`Source/Guard.blend` 是可编辑护卫姿势源，`poses/GuardLeftReady/frame.png` 为固定相机双视图。此样例用于贯通基础设施，不代表完整动作或游戏验收。本机 ComfyUI 的 Video2Rig 工作流目录已安装 `Keyframes_RightPunch.json` 和 `Keyframes_HighBlock.json`，输入图已配套安装，没有提交生成。
+本地姿势与角色文件位于 `work/MedievalGirlKeyframes/`，不随 Git 分发。`Source/Guard.blend` 是可编辑护卫姿势源，`poses/GuardLeftReady/frame.png` 为固定相机双视图。此样例用于贯通基础设施，不代表完整动作或游戏验收。本机 ComfyUI 的 Video2Rig 工作流目录只安装共享入口 `Keyframes_Action.json`；直拳和格挡通过各自的 `parameters.json` 与 `prompt.txt` 填入同一图，输入图已配套安装，没有提交生成。
 
 实际检查记录在该工作包的 `infrastructure-record.json`。角色回传已用保存后重新打开的单姿势验证；新拟合动作的 NPZ 回传分支与跨片动态速度，须在有实际动作后继续验证，不能用静态共享姿势的通过结果替代。
 
-所有命令拒绝覆盖已有有效姿势、动作包及回传文件。失败可能留下未完成目录；应先检查具体原因与任务归属，再按正常文件清理规则处理，不用强制重试掩盖失败。
+创建姿势、动作包、回传文件以及通过 `request --out` 导出的请求均拒绝覆盖已有目标；动作包中的当前参数和提示词可以正常编辑。失败可能留下未完成目录；应先检查具体原因与任务归属，再按正常文件清理规则处理，不用强制重试掩盖失败。

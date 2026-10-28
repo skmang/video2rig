@@ -4,7 +4,6 @@ import copy
 import os
 import shutil
 import sys
-import uuid
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +11,7 @@ import numpy as np
 from data import digest, file_hash, identifier, library, motion_matrices, pose, read, write
 
 REPO = Path(__file__).resolve().parents[2]
+WORKFLOW = REPO / 'workflows' / 'keyframes'
 
 
 def duration(category, seconds):
@@ -74,8 +74,6 @@ def prepare(a):
         if not np.allclose(endpoints[0]['sample']['armature_world'], endpoints[1]['sample']['armature_world'], atol=1e-5):
             raise ValueError('原地动作的首尾物体变换不同')
     prompt = (
-        f'参考图片与目标视频的对应关系：Picture 1 对应 Shot 1 的首帧；Picture 2 对应同一镜头的尾帧。'
-        f'实际片长 {frames / 24:.3f} 秒，尾帧位于 {(frames - 1) / 24:.3f} 秒。\n\n'
         f'integrated_multimodal_description: [Shot 1] {contract["motion"].strip()}\n\n'
         f'动作节奏：{contract["rhythm"].strip()}\n\n'
         '从 Picture 1 的动作姿势开始，以 Picture 2 的动作姿势结束，中间身体协调自然，动作连续有力度。'
@@ -83,30 +81,13 @@ def prepare(a):
         '全身与伸展中的手脚完整入镜，运动轮廓清楚，沿用参考角色外观，背景和照明稳定。\n\n'
         'overall_soundscape: 自然的发力呼吸、脚步和衣料摩擦声。\n\nnon_diegetic_music: N/A\n'
     )
-    template = REPO / 'workflows' / 'minimax_h3'
-    api = read(template / 'MedievalGirl_ComplexAction.api.json')
-    ui = read(template / 'MedievalGirl_ComplexAction.workflow.json')
+    defaults = read(WORKFLOW / 'Action.api.json')
     image_names = [f'{c["id"]}_{p["id"]}_{p["fingerprint"][:10]}.png' for p in endpoints]
-    api['1']['inputs']['image'] = image_names[0]
-    api['16'] = {'class_type': 'LoadImage', 'inputs': {'image': image_names[1]}, '_meta': {'title': '共享尾姿势'}}
-    api['6']['inputs'].update(prompt=prompt.rstrip(), width=width, height=height, length=frames, last_frame=['16', 0])
-    api['6']['_meta']['title'] = f'{name}：首尾关键姿势'
-    api['15']['inputs']['filename_prefix'] = f'video2rig/{c["id"]}/{name}'
-    nodes = {n['id']: n for n in ui['nodes']}
-    end_node = copy.deepcopy(nodes[1])
-    end_node.update(id=16, title='共享尾姿势', pos=[0, -420], order=0)
-    end_node['widgets_values'][0] = image_names[1]
-    end_node['outputs'][0]['links'] = [20]
-    nodes[1]['widgets_values'][0] = image_names[0]
-    nodes[1]['title'] = '共享首姿势'
-    nodes[6]['widgets_values'] = [prompt.rstrip(), width, height, frames]
-    nodes[6]['title'] = api['6']['_meta']['title']
-    end_index = next(i for i, x in enumerate(nodes[6]['inputs']) if x['name'] == 'last_frame')
-    nodes[6]['inputs'][end_index]['link'] = 20
-    nodes[15]['widgets_values'][0] = api['15']['inputs']['filename_prefix']
-    ui['nodes'].append(end_node)
-    ui['links'].append([20, 16, 0, 6, end_index, 'IMAGE'])
-    ui.update(id=str(uuid.uuid4()), last_node_id=16, last_link_id=20, revision=0)
+    parameters = {'first_image': image_names[0], 'last_image': image_names[1],
+                  'category': contract['category'], 'seconds': contract['seconds'],
+                  'width': width, 'height': height, 'steps': defaults['10']['inputs']['steps'],
+                  'seed': defaults['8']['inputs']['noise_seed'],
+                  'output_prefix': f'video2rig/{c["id"]}/{name}'}
     # 如需安装输入，提前检查重名内容，避免覆盖他人素材。
     if a.comfy_input:
         folder = Path(a.comfy_input).resolve()
@@ -137,20 +118,67 @@ def prepare(a):
     cfg['name'] = name
     cfg['clips'] = {name: {'file': f'clips/{name}.mp4'}}
     write(out / 'creature.json', cfg)
-    write(out / 'workflow.api.json', api)
-    write(out / 'workflow.json', ui)
+    write(out / 'parameters.json', parameters)
     (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
     write(out / 'action.json', contract)
     write(out / 'prepared.json', {
         'character': c['fingerprint'], 'library': os.path.relpath(root, out).replace('\\', '/'),
         'start': endpoints[0]['fingerprint'], 'end': endpoints[1]['fingerprint'],
-        'frames': frames, 'fps': 24, 'duration': frames / 24, 'last_frame_time': (frames - 1) / 24,
         'reader': 'not_attached: validate compatibility or train for this project before fitting',
-        'status': 'prepared_not_generated', 'api_sha256': file_hash(out / 'workflow.api.json'),
-        'ui_sha256': file_hash(out / 'workflow.json'),
+        'status': 'prepared_not_generated', 'parameters': 'parameters.json',
+        'workflow': os.path.relpath(WORKFLOW / 'Action.workflow.json', out).replace('\\', '/'),
+        'request_template': os.path.relpath(WORKFLOW / 'Action.api.json', out).replace('\\', '/'),
         'source_rig_sha256': file_hash(source / 'rig' / 'rig.json'),
     })
     print(f'已准备 {out}；{frames} 帧 / {frames / 24:.3f} 秒；未提交生成，未挂接识别器')
+
+
+def build_request(job):
+    """给同一节点图填入动作参数；不保存工作流副本，不提交队列。"""
+    job = Path(job).resolve()
+    p = read(job / 'parameters.json')
+    frames = duration(p['category'], p['seconds'])
+    width, height = p['width'], p['height']
+    cams = read(job / 'start' / 'cameras.json')
+    if (not all(type(x) is int and x > 0 for x in (width, height)) or width % 32 or height % 32
+            or width * cams['frame_px'][1] != height * cams['frame_px'][0]):
+        raise ValueError('分辨率须为正整数、32 的倍数并保持标定画幅比例')
+    if type(p['steps']) is not int or not 1 <= p['steps'] <= 10000:
+        raise ValueError('steps 须为 1～10000 的整数')
+    if type(p['seed']) is not int or not 0 <= p['seed'] <= 2**64 - 1:
+        raise ValueError('seed 超出整数范围')
+    for field, endpoint in (('first_image', 'start.png'), ('last_image', 'end.png')):
+        name = p[field]
+        if Path(name).name != name or file_hash(job / 'comfy-input' / name) != file_hash(job / 'start' / endpoint):
+            raise ValueError('输入图与动作包标定不配套；换姿势时请重新准备对应动作包')
+    api = read(WORKFLOW / 'Action.api.json')
+    api['1']['inputs']['image'] = p['first_image']
+    api['16']['inputs']['image'] = p['last_image']
+    # 时间信息由参数生成，prompt.txt 只维护动作描述，避免改时长后文字仍指向旧时长。
+    prompt = (job / 'prompt.txt').read_text(encoding='utf-8').strip()
+    if not prompt:
+        raise ValueError('动作提示词不能为空')
+    api['6']['inputs'].update(prompt=(
+        '参考图片与目标视频的对应关系：Picture 1 对应 Shot 1 的首帧；Picture 2 对应同一镜头的尾帧。'
+        f'实际片长 {frames / 24:.3f} 秒，尾帧位于 {(frames - 1) / 24:.3f} 秒。\n\n' + prompt),
+        width=width, height=height, length=frames)
+    api['8']['inputs']['noise_seed'] = p['seed']
+    api['10']['inputs']['steps'] = p['steps']
+    api['15']['inputs']['filename_prefix'] = p['output_prefix']
+    return api
+
+
+def request(a):
+    import json
+    api = build_request(a.job)
+    if a.out:
+        if a.out.exists():
+            raise ValueError('请求输出文件已存在，不覆盖')
+        write(a.out, api)
+    else:
+        print(json.dumps(api, ensure_ascii=False, indent=2))
+    frames = api['6']['inputs']['length']
+    print(f'{frames} 帧 / {frames / 24:.3f} 秒；仅填充共享节点图，未提交生成', file=sys.stderr)
 
 
 def join(a):
@@ -215,6 +243,7 @@ def join(a):
 
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     p = commands.add_parser('prepare', help='只生成首尾图配套动作包，不排队')
@@ -222,6 +251,10 @@ def main():
     p.add_argument('contract', type=Path)
     p.add_argument('--comfy-input', help='可选：将已渲染输入安装至已有 ComfyUI input 目录')
     p.set_defaults(run=prepare)
+    p = commands.add_parser('request', help='将动作参数填入共享 API 图并输出，不生成视频')
+    p.add_argument('job', type=Path)
+    p.add_argument('--out', type=Path, help='可选：导出一次性 API 请求；默认输出到终端')
+    p.set_defaults(run=request)
     p = commands.add_parser('join', help='检查共享边界及可选的实际 NPZ 边界差异')
     p.add_argument('first', type=Path)
     p.add_argument('second', type=Path)

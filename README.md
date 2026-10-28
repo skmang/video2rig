@@ -2,7 +2,7 @@
 
 本 fork 的人形输入处理、训练样图审阅与 H3 本地模型下载，见 [中文工作流](tools/humanoid_inputs/README.zh-CN.md)。原版核心代码保持不变；新增脚本不提供逐指动作识别。
 
-后续动作使用 [关键姿势生产规范](docs/MOTION-KEYFRAMES.zh-CN.md) 和 [姿势捕获、渲染、动作包与原骨架回传工具](tools/keyframe_motion/README.zh-CN.md)。短动作 1～3 秒，长动作 3～5 秒，由动作首尾姿势驱动。
+后续动作使用 [关键姿势技术入口](docs/MOTION-KEYFRAMES.zh-CN.md) 和 [姿势捕获、渲染、动作参数与原骨架回传工具](tools/keyframe_motion/README.zh-CN.md)。所有动作复用一套节点图；项目制作与验收规则在 gameart 维护，定位方式见技术入口。
 
 已跑过的八秒 MiniMax H3 工作流及结果保留为 [历史对照](workflows/minimax_h3/README.zh-CN.md)，不是后续动作的默认生产入口。
 

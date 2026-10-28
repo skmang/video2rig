@@ -1,0 +1,208 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "MedievalGirl_GuardLeftReady_0bfd402abc.png"
+    },
+    "_meta": {
+      "title": "标定首帧：正面与解剖学左侧"
+    }
+  },
+  "2": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_fl2va_pruned_w6a8.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "3090：W6A8 主模型"
+    }
+  },
+  "3": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "H3 文本与图像编码器"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+    },
+    "_meta": {
+      "title": "视频 VAE"
+    }
+  },
+  "6": {
+    "class_type": "MiniMaxH3ImageToVideo",
+    "inputs": {
+      "clip": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "prompt": "参考图片与目标视频的对应关系：Picture 1 对应 Shot 1 的首帧；Picture 2 对应同一镜头的尾帧。实际片长 2.333 秒，尾帧位于 2.292 秒。\n\nintegrated_multimodal_description: [Shot 1] 角色从左脚稍前的战斗护卫姿势开始，完成一次迅速有力的右手直拳，随后自然收回同一护卫姿势。\n\n动作节奏：开头短促蓄力，约前半秒内进入攻击；蹬地转髋带动直拳快速击出，在约一秒之前完成击打，随即收拳。后半段顺势吸收惯性并恢复平衡，结束时保持可以衔接下一招的护卫。蓄力紧凑、击打迅速、回收利落，伸拳极值不停成展示姿势。\n\n从 Picture 1 的动作姿势开始，以 Picture 2 的动作姿势结束，中间身体协调自然，动作连续有力度。左栏正面、右栏角色左侧面，同步展示同一角色的同一次动作。两个镜头固定，保持原有构图与人物尺度，全身与伸展中的手脚完整入镜，运动轮廓清楚，沿用参考角色外观，背景和照明稳定。\n\noverall_soundscape: 自然的发力呼吸、脚步和衣料摩擦声。\n\nnon_diegetic_music: N/A",
+      "width": 1024,
+      "height": 576,
+      "length": 56,
+      "first_frame": [
+        "1",
+        0
+      ],
+      "last_frame": [
+        "16",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "动作：首尾关键帧"
+    }
+  },
+  "7": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "原版引导 CFG=1"
+    }
+  },
+  "8": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 2026102701
+    },
+    "_meta": {
+      "title": "固定种子"
+    }
+  },
+  "9": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "res_multistep"
+    },
+    "_meta": {
+      "title": "原版采样器"
+    }
+  },
+  "10": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 16,
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "16 步动作优先采样"
+    }
+  },
+  "11": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "8",
+        0
+      ],
+      "guider": [
+        "7",
+        0
+      ],
+      "sampler": [
+        "9",
+        0
+      ],
+      "sigmas": [
+        "10",
+        0
+      ],
+      "latent_image": [
+        "6",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "采样"
+    }
+  },
+  "12": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "tile_size": 512,
+      "overlap": 64,
+      "temporal_size": 64,
+      "temporal_overlap": 8
+    },
+    "_meta": {
+      "title": "分块视频解码"
+    }
+  },
+  "14": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "12",
+        0
+      ],
+      "fps": 24,
+      "bit_depth": 8,
+      "color_space": "sRGB",
+      "codec": "none"
+    },
+    "_meta": {
+      "title": "合成 24fps 无音轨视频"
+    }
+  },
+  "15": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "14",
+        0
+      ],
+      "filename_prefix": "video2rig/Action",
+      "format": "mp4",
+      "format.codec": "h264",
+      "format.codec.encoding": "re-encode",
+      "format.codec.encoding.crf": 18
+    },
+    "_meta": {
+      "title": "保存视频"
+    }
+  },
+  "16": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "MedievalGirl_GuardLeftReady_0bfd402abc.png"
+    },
+    "_meta": {
+      "title": "共享尾姿势"
+    }
+  }
+}
