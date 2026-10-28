@@ -262,6 +262,34 @@ def main():
     p.add_argument('--motion-second')
     p.add_argument('--out', type=Path)
     p.set_defaults(run=join)
+    # 导入入口不加载 torch/模型，也不解码视频。重计算命令默认只显示待执行任务。
+    from fitting import calibrate, recognise, fit
+    from training import train, evaluate
+    p = commands.add_parser('calibrate', help='轻量：从中性基准记录固定肘膝和单位，不训练')
+    p.add_argument('library', type=Path)
+    p.set_defaults(run=calibrate)
+    for command, run in (('read', recognise), ('fit', fit)):
+        p = commands.add_parser(command, help='默认只检查合同；--execute 才启动计算')
+        p.add_argument('job', type=Path)
+        if command == 'read':
+            p.add_argument('--hf-home', type=Path, required=True, help='已有 DINO 缓存根；离线运行')
+        p.add_argument('--execute', action='store_true')
+        p.set_defaults(run=run)
+    p = commands.add_parser('train', help='默认只显示计划；--execute 才训练共享 reader')
+    p.add_argument('library', type=Path)
+    p.add_argument('--hf-home', type=Path, required=True, help='已有 DINO 缓存根；离线运行')
+    p.add_argument('--steps', type=int, default=9000)
+    p.add_argument('--batch', type=int, default=24)
+    p.add_argument('--execute', action='store_true')
+    p.set_defaults(run=train)
+    p = commands.add_parser('evaluate', help='默认只显示计划；--execute 才评估 reader')
+    p.add_argument('library', type=Path)
+    p.add_argument('--hf-home', type=Path, required=True)
+    p.add_argument('--renders', default='reader/renders')
+    p.add_argument('--all-poses', action='store_true', help='仅用于独立样本集；不用于训练集')
+    p.add_argument('--confidence', type=float, default=.5, help='热图峰值分组阈值，不是概率')
+    p.add_argument('--execute', action='store_true')
+    p.set_defaults(run=evaluate)
     args = parser.parse_args()
     args.run(args)
 

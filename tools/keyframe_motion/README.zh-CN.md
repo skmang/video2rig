@@ -14,6 +14,9 @@
 | `motion.py prepare` | 准备动作输入、配套起始骨架、提示词与参数；引用共享工作流，不排队 |
 | `motion.py request` | 把指定动作参数填入共享 API 图，输出一次性请求；不排队、不保存工作流副本 |
 | `motion.py join` | 检查共享边界合同；提供两条实际 NPZ 后报告位置、旋转和速度差 |
+| `motion.py calibrate` | 从固定中性基准保存单位和肘膝方向；仅小型骨架计算 |
+| `motion.py train` / `evaluate` | 默认显示待执行任务；明确加 `--execute` 才训练或评估共享 reader |
+| `motion.py read` / `fit` | 默认检查合同；明确加 `--execute` 才识别视频或进行米制固定相机拟合 |
 
 当前骨轴转换支持本项目已记录的同名、同层级骨架；被移除的骨必须是原处理记录中的无权重叶骨。不是任意角色的自动重定向。写入目标骨架不能带驱动或约束；有控制器的制作源可先捕获其求值姿势，再应用到无约束的处理副本。NPZ 回传目前拒绝带独立道具轨道的动画，不静默丢弃道具。
 
@@ -74,15 +77,45 @@ python tools/keyframe_motion/motion.py request LIB/jobs/RightPunch
 
 ```powershell
 blender --background processed.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- materialize LIB --id GuardLeftReady --out JOB/Input/start.blend
-# 以下是后续单独授权执行的原版步骤，不由本工具自动运行：
-# 先按人形输入流程生成 JOB 的配套训练数据，再调用训练器：
-# python -m video2rig.reader.train JOB --steps 9000
-# python -m video2rig check JOB RightPunch
-# python -m video2rig run JOB RightPunch
-# python -m video2rig review JOB RightPunch
+# 首先核对能否复用角色级数据；新版入口及明确启动方法见下节。
 ```
 
 原版 prepare 的随机训练姿势默认没有本 fork 已确认的人形与手型约束；正式重建数据时应按 [人形输入流程](../humanoid_inputs/README.zh-CN.md) 生成配套姿态、图片与遮挡，再调用原版训练器。不要为方便训练退回无约束随机姿势。
+
+## 标定、共享识别器与明确启动
+
+`calibrate LIB` 从角色库关联的中性训练骨架生成一次 `fitting.json`，保存角色指纹、均匀缩放、固定肘膝轴与符号。当前面向已记录的 MedievalGirl 人形；肘部最大屈曲 150°、膝部 140°、伸直侧余量 2°是本流程的保守初值，不代表所有人形或动态已验收。标定不能随动作护卫重新猜测，不覆盖现有文件。
+
+```powershell
+# 轻量操作：一次标定，不启动训练、视频、渲染或求解。
+python tools/keyframe_motion/motion.py calibrate LIB
+
+# 以下均为不执行计算的任务预览。HF_HOME_DIR 是已有 DINO 缓存根，下面有 hub/。
+python tools/keyframe_motion/motion.py train LIB --hf-home HF_HOME_DIR
+python tools/keyframe_motion/motion.py evaluate LIB --hf-home HF_HOME_DIR
+python tools/keyframe_motion/motion.py read JOB --hf-home HF_HOME_DIR
+python tools/keyframe_motion/motion.py fit JOB
+```
+
+只有用户明确开始对应任务后，才在相应命令末尾追加 `--execute`。训练、生成、评估、识别、拟合、Blender 制作和 Unity 验收是分别执行的任务，没有自动串跑入口。训练默认 9,000 步、batch 24、seed 20261028；在角色库关联的训练项目产生一份共享 `reader/reader.pt`，两条动作显式读取它，不复制权重、不回退旧跟踪路线。只允许本地离线 DINO 缓存，不下载或安装。
+
+训练入口复用当前人形数据，先从 16 个分布在全序列的实际姿态核对 `params.npy` 缓存；这只是缓存小样本一致性检查，不代替全量样本质量审阅。保留现有同姿态跨视角的 95/5 划分。训练输入记录绑定姿态、标签、遮挡、骨架、相机和训练源码；训练结束只标为待验收。
+
+`evaluate` 按视角和关节给出误差中位数、P95、相对身高误差、高峰值错误和遮挡误报，不将热图峰值当概率。默认只评估按姿态留出的 5%；额外的独立姿态集可放在同一训练项目另一个渲染目录，用 `--renders <相对目录> --all-poses`。该目录需要配套的图片、`labels.npz`、`poses.npz` 和 `visible.npz`，不能把训练集全量当作独立集。报告的像素对应标定分栏尺寸，不能与缩小后的生成视频像素混用。还须观察真实视频的左右身份和动作事件。
+
+`read` 先核对 checkpoint 的完整标签定义，使用 8 次平移/缩放采样，产出 `work/<动作>/reader-keyframes.npz`、输入指纹、抽帧图及全帧 24fps 关节点叠加视频。叠加视频回读尺寸和帧数；空心点表示热图峰值低于 0.3，仅用于观察，不是可靠性判决阈值。未观察的视频不能因生成了叠加预览就标为识别通过。
+
+`fit` 只消费配套的新版识别结果，拒绝过期的视频、相机、骨架、标定或权重。通过实例扩展和原版公开计算入口实现：
+
+- 在内存中把网格、静止矩阵平移、骨长、起始平移和空间标签一起转成米，调整物体矩阵保持世界投影不变；源文件不改变。拒绝镜像、非均匀缩放和独立道具轨道。
+- 使用固定相机及帧号除以 24，不进入原版轮廓重标定或 Seedance 帧率猜测；实际帧数和尺寸必须等于当前动作参数。
+- 使用固定肘膝轴、方向和范围；起点超范围直接报告，不裁剪起点。
+- IK 辅助点不作为有效识别观测；关闭自动由脚步推算行进及双栏漂移补偿，保留原版骨长、时间、地面和接触处理。
+- 保留原始识别与实际使用的观测，分别输出全帧重投影误差。`out/<动作>.npz` 转回原处理骨架单位，继续供 `transfer` 和 `join` 消费。
+
+本入口当前只支持原地动作，关闭行进推算不等于已经锁定根位置。拟合结果仍须检查并修正累计位移、鞋底真实接触、手指、首尾姿势、速度和蒙皮；不自动硬替换端点，也不把局部骨头锁定等同于鞋底无滑动。动态结果只标为 `fitted_not_accepted`。原版 `run/review` 不消费这套固定标定适配，不能用它们重新求解或解释本入口结果；后续使用原骨架 `transfer` 并从 Blender 保存状态制作动态预览。
+
+这些新入口已接线但尚未运行新版训练、推理或真实拟合；实际状态以工作包记录为准。
 
 ## 原骨架回传与衔接
 
