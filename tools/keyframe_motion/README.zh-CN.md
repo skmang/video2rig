@@ -1,148 +1,132 @@
 # 关键姿势与动作准备工具
 
-项目制作与验收规则由 gameart 的 `Docs/Workflows/KeyframeMotion.md` 维护；本仓库的 [技术约定](../../docs/MOTION-KEYFRAMES.zh-CN.md) 负责帧数、输入接口及能力边界。这是原版之外的输入和输出工具，不修改核心、不提供界面、不调用视频生成接口。依赖复用 Blender 的 Python/numpy，以及原 video2rig 环境的 numpy/scipy。
+制作顺序、何时可复用权重以及每步的验收条件由 gameart 的 `Docs/Workflows/KeyframeMotion.md` 维护。本页给出实际命令；[技术约定](../../docs/MOTION-KEYFRAMES.zh-CN.md)列出相机、帧数、数据配套及工具能力。
 
-## 已有入口
+## 先选入口
 
-| 入口 | 作用 |
-| --- | --- |
-| `blender_keyframes.py init` | 固定角色、骨架静止矩阵、源文件和相机基准 |
-| `capture` | 从当前 Blender 文件的指定帧捕获姿势、手型、根变换、接触骨骼；可保存附近帧 |
-| `render` | 使用基准相机渲染单姿势正侧面 PNG，不随姿势重新取景 |
-| `materialize` | 将共享姿势应用到处理骨架，另存可编辑/可用于训练的 Blender 源 |
-| `transfer` | 把共享姿势或原版拟合 NPZ 按静止矩阵转回原骨架，保存 Blender Action |
-| `motion.py prepare` | 准备动作输入、配套起始骨架、提示词与参数；引用共享工作流，不排队 |
-| `motion.py request` | 把指定动作参数填入共享 API 图，输出一次性请求；不排队、不保存工作流副本 |
-| `motion.py join` | 检查共享边界合同；提供两条实际 NPZ 后报告位置、旋转和速度差 |
-| `motion.py calibrate` | 从固定中性基准保存单位和肘膝方向；仅小型骨架计算 |
-| `motion.py train` / `evaluate` | 默认显示待执行任务；明确加 `--execute` 才训练或评估共享 reader |
-| `motion.py read` / `fit` | 默认检查合同；明确加 `--execute` 才识别视频或进行米制固定相机拟合 |
+- **固定相机入口：** `tools/keyframe_motion/`，已实跑 MedievalGirl 原地动作。使用配套的处理骨架、原骨架和固定正侧面相机。不同人形骨架须先证明对应关系及关节标定可用。要处理行进根运动、独立道具轨道、侧面加顶视或不同骨架间的重定向，不能直接用这套命令。
+- **原版入口：** 不满足固定入口前提时，从[本 fork 原版流程](../../docs/WORKFLOW.md)或选定的[上游版本](https://github.com/canitcode/video2rig/blob/2b94937/docs/WORKFLOW.md)开始。它们各自处理相机、时序、拟合和导入。按同一版本使用 `check/run/review` 与 `blender/import_motion.py`，先确认该项目下有配套 `reader/reader.pt`，否则 `run` 会走旧点跟踪。新物种或新绑定先做一条短片验证；按实际结果判断能否用于生产。
 
-当前骨轴转换支持本项目已记录的同名、同层级骨架；被移除的骨必须是原处理记录中的无权重叶骨。不是任意角色的自动重定向。写入目标骨架不能带驱动或约束；有控制器的制作源可先捕获其求值姿势，再应用到无约束的处理副本。NPZ 回传目前拒绝带独立道具轨道的动画，不静默丢弃道具。
+以下命令只用于**固定相机入口**，在 video2rig 仓库根目录执行。例子用 PowerShell；`blender` 和 `python` 表示实际 Blender 与 video2rig Python 环境的程序，可换成完整路径。把 `PROJECT`、`LIB` 等占位符换成实际位置，含空格的路径加引号。Windows 上将训练项目、姿势库和处理版 `.blend` 放在同一盘符，工具会记录它们之间的相对路径。运行前准备可用的 CUDA PyTorch、本地 DINOv2-small 缓存和已安装 H3 模型的 ComfyUI。依赖见[仓库说明](../../README.md#what-you-need)。渲染、训练、H3 生成和识别共享显卡时按顺序执行。
 
-## 命令
+## 1. 新角色：准备训练项目与姿势库
 
-在仓库根目录执行。以下 `blender` 和 `python` 替换为现有程序路径；`LIB`、`PROJECT`、文件路径是用户工作目录。Blender 使用 `--python-exit-code 1`，防止 Python 失败仍被当作成功。
+```text
+PROJECT/                      角色训练项目
+  Input/preparation.json       原骨架对应关系
+  creature.json                根骨、朝向、关节配置
+  rig/                         处理骨架与网格
+  start/cameras.json            固定相机
+  reader/                      姿态、样图、标签、遮挡、共享权重
+
+LIB/                          与 PROJECT 关联的角色姿势库
+  character.json, fitting.json  角色与拟合基准
+  poses/<姿势ID>/                三维姿势与固定相机图
+  jobs/<动作ID>/                 各动作的输入、观测与拟合结果
+```
+
+1. 在 `PROJECT` 准备中性的处理版 Blender 文件、原角色源和骨架处理记录。对与 MedievalGirl 相容的输入可按[人形样图流程](../humanoid_inputs/README.zh-CN.md#运行顺序)执行。其它绑定先按[技术约定的输入要求](../../docs/MOTION-KEYFRAMES.zh-CN.md#固定相机入口的前提)核对源及对应关系；`init` 不会替你生成映射。
+2. 用同一份处理版导出 `PROJECT/rig/` 和 `PROJECT/start/cameras.json`。相机留出动作活动空间，正面在左栏，侧面在右栏。以下 `-Y` 与左侧机位只是示例；按实际朝向选择，用 `--margin` 调整两栏的留白。已有一致的训练项目可直接从 `init` 开始。
 
 ```powershell
-# 1. 用标定时的处理模型建立基准；PROJECT 是已有训练项目。
+blender --background processed.blend --python-exit-code 1 --python blender/export_rig.py -- --out PROJECT/rig
+blender --background processed.blend --python-exit-code 1 --python blender/render_start.py -- --out PROJECT/start --views front,side --facing=-Y --side left
 blender --background processed.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- init LIB --project PROJECT --id MyCharacter
-
-# 2. 在 Blender 摆好动作姿势或选好动画帧，保存源文件后捕获。
-blender --background authored.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- capture LIB --id GuardLeftReady --frame 1 --contacts foot_l foot_r
-# 运动中的连接状态可加 --window 2，保存前后各两帧；静态姿势不虚构速度。
-
-# 3. 渲染固定相机关键图。处理模型须与 init 完全一致。
-blender --background processed.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- render LIB --id GuardLeftReady --samples 16
-
-# 4. 编辑动作合同，然后只准备文件。
-python tools/keyframe_motion/motion.py prepare LIB tools/keyframe_motion/examples/RightPunch.json
-# 可选 --comfy-input <现有ComfyUI/input目录>，只安装输入 PNG，不提交任务。
-```
-
-姿势 ID 使用 PascalCase；引用后的姿势不覆盖。需要修改时捕获为新 ID，更新受影响动作合同并准备新的动作包 ID。渲染器检查实际网格是否出框并记录地面高度，但不把数值检查当成姿势视觉验收。
-
-动作合同示例：[直拳](examples/RightPunch.json)、[高位格挡](examples/HighBlock.json)。两者共享 `GuardLeftReady`，实际片长分别为 56/24≈2.33 秒、39/24≈1.63 秒。模型原生帧数匹配最近合法值，不通过改播放速度或补帧达到时长。
-
-## 一套共享工作流与动作参数
-
-只维护 `workflows/keyframes/Action.workflow.json` 一套界面节点图及同图的 `Action.api.json`。界面版可导入 ComfyUI，默认展示直拳样例；切换动作修改首尾图片、提示词、帧数、步数、种子和输出前缀，不另存动作工作流。API 版由下列命令自动填参，批量任务逐个传入动作包即可，所有动作复用同一图：
-
-```powershell
-python tools/keyframe_motion/motion.py request LIB/jobs/RightPunch
-# 可选 --out <不存在的请求文件.json>；仅导出一次性请求，不提交队列。
-```
-
-`request` 的标准输出为完整 API JSON，实际帧数与时长写到标准错误；可供获授权的执行器直接读取，无需落盘。界面手动操作时，节点输入应与该请求一致，包括工具计算的合法帧数和带实际时间的完整提示词。请求文件是一次执行的材料，不作为第二份长期维护的工作流。
-
-每个动作包只维护以下数据，修改参数后再次执行 `request` 即生效：
-
-| 文件 | 用途 |
-| --- | --- |
-| `parameters.json` | 当前图像名、短长类别、目标时长、分辨率、步数、种子和输出前缀 |
-| `prompt.txt` | 当前动作与节奏正文；请求时自动补充实际片长、尾帧时间和输入图对应关系 |
-| `action.json` | 准备时的动作合同和首尾姿势 ID；保留起始依据，不覆盖当前参数或提示词 |
-| `prepared.json` | 角色和首尾指纹、来源、共享模板的相对路径及识别器准备状态 |
-| `start/`、`rig/`、`comfy-input/` | 首尾图、相机和起始骨架，以及供 ComfyUI 加载的输入图 |
-
-只改节奏、时长或采样参数时编辑当前 `prompt.txt` 与 `parameters.json`，不重建角色和姿势库；目标时长变化后须核对正文中的节奏时间。换首尾姿势时重新准备配套动作包，不能只改图片而沿用旧 `rig.json`。分辨率保持标定比例，输入图须与包内首尾图一致。
-
-先把 `comfy-input/` 的 PNG 安装到现有 ComfyUI input（或在 prepare 时指定该目录），再由明确的生成操作执行。模型与节点默认值只在共享图维护；当前默认 W6A8 H3、16 步、1024×576、24 fps、首尾帧约束，无放大、插帧或音频解码。变更共享图时同步界面/API 格式与安装副本，并核对现有动作参数；仅改动作时不改图结构。
-
-包内 `rig/rig.json` 的 `start_pose` 和物体变换来自实际首姿势，`start/start.png`、`start/end.png`、`start/cameras.json` 与其配套。中间姿势暂不接入；合同含额外字段时会报错，避免写了中间约束却实际没有使用。
-
-视频生成后另存到 `JOB/clips/<动作ID>.mp4`。**准备包不自动复制 reader.pt**：识别时从角色关联的训练项目读取共享权重，并核对关节标签。换首姿势仍须检查权重与角色、相机及动作姿态是否配套。未准备识别器时不要直接运行原版 `run`，它会进入旧跟踪路线。
-
-若为新起点训练，先保存正确的处理骨架姿势源：
-
-```powershell
-blender --background processed.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- materialize LIB --id GuardLeftReady --out JOB/Input/start.blend
-# 首先核对能否复用角色级数据；新版入口及明确启动方法见下节。
-```
-
-原版 prepare 的随机训练姿势默认没有本 fork 已确认的人形与手型约束；正式重建数据时应按 [人形输入流程](../humanoid_inputs/README.zh-CN.md) 生成配套姿态、图片与遮挡，再调用原版训练器。不要为方便训练退回无约束随机姿势。
-
-## 标定、共享识别器与明确启动
-
-`calibrate LIB` 从角色库关联的中性训练骨架生成一次 `fitting.json`，保存角色指纹、均匀缩放、固定肘膝轴与符号。当前面向已记录的 MedievalGirl 人形；肘部最大屈曲 150°、膝部 140°、伸直侧余量 2°是本流程的保守初值，不代表所有人形或动态已验收。标定不能随动作护卫重新猜测，不覆盖现有文件。
-
-```powershell
-# 轻量操作：一次标定，不启动训练、视频、渲染或求解。
 python tools/keyframe_motion/motion.py calibrate LIB
-
-# 以下均为不执行计算的任务预览。HF_HOME_DIR 是已有 DINO 缓存根，下面有 hub/。
-python tools/keyframe_motion/motion.py train LIB --hf-home HF_HOME_DIR
-python tools/keyframe_motion/motion.py evaluate LIB --hf-home HF_HOME_DIR
-python tools/keyframe_motion/motion.py read JOB --hf-home HF_HOME_DIR
-python tools/keyframe_motion/motion.py fit JOB
 ```
 
-只有用户明确开始对应任务后，才在相应命令末尾追加 `--execute`。训练、生成、评估、识别、拟合、Blender 制作和 Unity 验收是分别执行的任务，没有自动串跑入口。训练默认 9,000 步、batch 24、seed 20261028；在角色库关联的训练项目产生一份共享 `reader/reader.pt`，两条动作显式读取它，不复制权重、不回退旧跟踪路线。只允许本地离线 DINO 缓存，不下载或安装。
+`init` 写出 `LIB/character.json`，`calibrate` 从固定的中性骨架写出 `LIB/fitting.json`。后者包含米制换算和关节轴、弯曲方向及范围。用实际屈伸、接触和回传检查标定，不能从每条动作的护卫姿势重新猜关节方向。
 
-训练入口复用当前人形数据，先从 16 个分布在全序列的实际姿态核对 `params.npy` 缓存；这只是缓存小样本一致性检查，不代替全量样本质量审阅。保留现有同姿态跨视角的 95/5 划分。训练输入记录绑定姿态、标签、遮挡、骨架、相机和训练源码；训练结束只标为待验收。
-
-`evaluate` 按视角和关节给出误差中位数、P95、相对身高误差、高峰值错误和遮挡误报，不将热图峰值当概率。默认只评估按姿态留出的 5%；额外的独立姿态集可放在同一训练项目另一个渲染目录，用 `--renders <相对目录> --all-poses`。该目录需要配套的图片、`labels.npz`、`poses.npz` 和 `visible.npz`，不能把训练集全量当作独立集。报告的像素对应标定分栏尺寸，不能与缩小后的生成视频像素混用。还须观察真实视频的左右身份和动作事件。
-
-`read` 先核对 checkpoint 的完整标签定义，使用 8 次平移/缩放采样，产出 `work/<动作>/reader-keyframes.npz`、输入指纹、抽帧图及全帧 24fps 关节点叠加视频。叠加视频回读尺寸和帧数；空心点表示热图峰值低于 0.3，仅用于观察，不是可靠性判决阈值。未观察的视频不能因生成了叠加预览就标为识别通过。
-
-`fit` 只消费配套的新版识别结果，拒绝过期的视频、相机、骨架、标定或权重。通过实例扩展和原版公开计算入口实现：
-
-- 在内存中把网格、静止矩阵平移、骨长、起始平移和空间标签一起转成米，调整物体矩阵保持世界投影不变；源文件不改变。拒绝镜像、非均匀缩放和独立道具轨道。
-- 使用固定相机及帧号除以 24，不进入原版轮廓重标定或 Seedance 帧率猜测；实际帧数和尺寸必须等于当前动作参数。
-- 使用固定肘膝轴、方向和范围；起点超范围直接报告，不裁剪起点。
-- IK 辅助点不作为有效识别观测；关闭自动由脚步推算行进及双栏漂移补偿，保留原版骨长、时间、地面和接触处理。
-- 保留原始识别与实际使用的观测，分别输出全帧重投影误差。`out/<动作>.npz` 转回原处理骨架单位，继续供 `transfer` 和 `join` 消费。
-
-本入口当前只支持原地动作，关闭行进推算不等于已经锁定根位置。拟合结果仍须检查并修正累计位移、鞋底真实接触、手指、首尾姿势、速度和蒙皮；不自动硬替换端点，也不把局部骨头锁定等同于鞋底无滑动。动态结果只标为 `fitted_not_accepted`。原版 `run/review` 不消费这套固定标定适配，不能用它们重新求解或解释本入口结果；后续使用原骨架 `transfer` 并从 Blender 保存状态制作动态预览。
-
-### 和上游入口的区别
-
-本 fork 从首发版分出。本地 `fit` 保留逐帧带时间约束的拟合、左右纠错、遮挡侧降权及清理；上游后来在 `fd3ef75` 改为全段联合求解，并通过 `reader/sync.py` 对两栏共有方向的关节轨迹做时序匹配。直接照上游教程运行 `check/run/review` 会进入该版本自己的相机和时间准备，不能当成这里的固定标定结果。
-
-固定相机样例可以将原始识别结果与固定投影传入 `video2rig.check.panel_misses`，分别查看躯干和肢体的差异。这个量只衡量两栏共有方向；侧面横向的错点仍可能改变深度。整段躯干误差低时，也要检查出拳或格挡窗口里的肘、腕和左右身份。
-
-## 原骨架回传与衔接
+3. 为动作摆姿势或从已有动作取样，保存为 `authored.blend`；它可用配套原骨架或处理骨架。以下骨名和帧号换成实际的。另一个端点重复捕获和渲染；首尾相同就复用同一个 ID。
 
 ```powershell
-# 只回传一个共享姿势。
-blender --background original.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- transfer LIB --pose GuardLeftReady --out guard-original.blend
-
-# 拟合完成后回传真正动作；JOB 的起始数据用于保留未拟合的骨骼姿势。
-blender --background original.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- transfer LIB --motion JOB/out/RightPunch.npz --job JOB --out punch-original.blend
-
-# 只检查两条动作的共享端点合同。
-python tools/keyframe_motion/motion.py join LIB/jobs/RightPunch LIB/jobs/HighBlock
-# 实际动画产生后追加：--motion-first <第一条.npz> --motion-second <第二条.npz>
+blender --background authored.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- capture LIB --id GuardReady --frame 1 --contacts foot_l foot_r
+blender --background processed.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- render LIB --id GuardReady --samples 16
 ```
 
-转换公式为 `P_original = (P_processing × inverse(R_processing)) × R_original`，再按原父子层级求局部姿势。它保留蒙皮变换，不直接复制不同骨轴的四元数。回传记录实际写入矩阵误差，保留原骨架；不输出 FBX，不写入 Unity。
+`capture` 保存 `pose.json`，`render` 用绑定在 `character.json` 的处理源和相机生成 `frame.png`、`render.json`。多个骨架用 `--armature` 指定；运动边界可给 `capture` 加 `--window 2` 保存前后两帧。需单独保存处理版的该姿势时，用 `materialize LIB --id GuardReady --out guard-processed.blend`，仍打开同一处理源。姿势 ID 使用 PascalCase；修改已被引用的姿势时换 ID。
 
-`join` 的实际动作检查不自动对齐根位置、不修复脚滑、不自动判定自然程度。报告全部记录骨骼头部的位置差、姿态角差及相邻帧线速度/角速度差；共享静态姿势通过只代表连接合同一致。运动中的边界窗口是制作依据，当前 H3 首尾图入口不消费窗口视频，不能把保存了窗口称为已经约束了速度。
+## 2. 新角色或新观测条件：准备并检查共享识别器
 
-## 当前本机样例
+识别器由角色级 `PROJECT/reader/reader.pt` 提供。固定入口从关联项目读取，不复制到每个动作。已有权重先按[配套条件](../../docs/MOTION-KEYFRAMES.zh-CN.md#识别与拟合的数据)和实际独立样本核对；配套证据有效时跳过训练。
 
-本地制作状态位于 `work/MedievalGirlKeyframes/execution.json`，原始护卫源在 `Source/Guard.blend`，固定相机双视图在 `poses/GuardLeftReady/frame.png`。两个动作继续复用一套 ComfyUI 图；各自的请求、生成视频、识别和原骨架拟合保留在 `jobs/`。
+需要重建数据时，先备好 `reader/poses.npz`、`reader/renders/` 下按视角保存的样图与 `labels.npz`、`reader/visible.npz`。MedievalGirl 人形约束见[训练样图步骤](../humanoid_inputs/README.zh-CN.md#运行顺序)；其它角色可查[原版姿态、渲染与遮挡入口](../../docs/WORKFLOW.md#2b-train-the-joint-reader-once-per-creature)，按角色核对样图。不要用 `reader.prepare` 覆盖已确认的训练数据。生成新姿态、相机或标签后不能混用旧 `params.npy`。
 
-MedievalGirl 已用角色级 80 点 reader 完成实际直拳和格挡的识别、双视角拟合与原骨架回传。成品修正、FBX、双向衔接预览和 Unity 3001 证据见 gameart 的 `Animations/MedievalGirlVideoMotion/delivery.md`。静态基础设施记录和理想屈肘标定保留各自的检查范围。
+另备 `PROJECT/reader/independent/`。可先用与训练不同的种子抽一组姿态检查基础观测；再准备动作特有的极值、遮挡和接触姿势。以下第一条是可选的基础抽样，已有针对性样本时跳过它。针对性样本用该处理骨架的关节参数 `params`（每个姿势一行），按[姿态编码与写出示例](../../video2rig/reader/poses.py#L397)同时写出配套的 `bones`、`root`、`quats` 和 `root_location`。后两条分别用姿态渲染图像及标签、用同一批参数计算遮挡。`capture` 的单姿势 JSON 不能直接传入，两个数据集也不能混用。
 
-创建姿势、动作包、回传文件以及通过 `request --out` 导出的请求均拒绝覆盖已有目标；动作包中的当前参数和提示词可以正常编辑。失败可能留下未完成目录；应先检查具体原因与任务归属，再按正常文件清理规则处理，不用强制重试掩盖失败。
+```powershell
+python -m video2rig.reader.poses PROJECT --n 24 --seed 20261101 --out PROJECT/reader/independent/poses.npz
+blender --background processed.blend --python-exit-code 1 --python blender/render_poses.py -- --poses PROJECT/reader/independent/poses.npz --cameras PROJECT/start/cameras.json --out PROJECT/reader/independent --project PROJECT --sharp
+python -m video2rig.reader.visible PROJECT --poses PROJECT/reader/independent/poses.npz --out PROJECT/reader/independent/visible.npz
+```
+
+然后分别训练、评估留出集与独立集：
+
+```powershell
+python tools/keyframe_motion/motion.py train LIB --hf-home DINO_CACHE --execute
+python tools/keyframe_motion/motion.py evaluate LIB --hf-home DINO_CACHE --execute
+python tools/keyframe_motion/motion.py evaluate LIB --hf-home DINO_CACHE --renders reader/independent --all-poses --execute
+```
+
+`DINO_CACHE` 是包含 `hub/` 的现有缓存根；该入口离线，不会下载。去掉 `--execute` 只查看待执行任务。训练默认 9,000 步、batch 24、seed 20261028，可按验证结果选择训练预算。`train` 写权重、训练结果和输入指纹；`evaluate` 分别为按姿态留出的约 5% 与指定独立集写出分视角、分关节报告。其像素以标定画幅计，与视频像素比较前要换算。`evaluate` 是单次识别评估，生产 `read` 用八次平移缩放采样；发现错点时用生产读法和实际拟合定位，不按平均误差或热图峰值单独判定。
+
+## 3. 每条动作：准备输入、排队并选片
+
+以[直拳](examples/RightPunch.json)或[高位格挡](examples/HighBlock.json)为字段示例，准备自己的 `ActionSpec.json`。其中 `id` 决定下面的 `ActionId`，首尾姿势 ID 必须已经渲染。原地拟合使用 `root_motion: "in_place"`；独立根运动不走本入口。使用实际角色关节、左右视角和动作意图。
+
+```powershell
+python tools/keyframe_motion/motion.py prepare LIB ActionSpec.json --comfy-input COMFY_INPUT_DIR
+python tools/keyframe_motion/motion.py request LIB/jobs/ActionId --out REQUEST_JSON
+```
+
+`COMFY_INPUT_DIR` 是现有 ComfyUI 的输入目录；也可省略该参数，之后按原文件名安装动作包 `comfy-input/` 里的 PNG。初次生成以后只改节奏、时长或采样参数时，编辑动作包的 `prompt.txt`、`parameters.json` 再执行 `request`；换首尾姿势则重新准备动作包。自动生成的提示词含默认左侧机位，若实际拍的是右侧，先修正文字以匹配相机。保持中文动作和画面约束。每次生成保存实际请求；`REQUEST_JSON` 的父目录须存在、文件须是新路径。
+
+`request` 只填共享图，不排队。人工在界面操作时，导入 [Action.workflow.json](../../workflows/keyframes/Action.workflow.json)，按请求更新节点输入。用 API 时，把请求 JSON 作为 `prompt` 提交给已经运行的本机 ComfyUI，例如：
+
+```powershell
+$graph = Get-Content -LiteralPath 'REQUEST_JSON' -Raw -Encoding utf8 | ConvertFrom-Json
+$body = ConvertTo-Json -InputObject @{ prompt = $graph } -Depth 100 -Compress
+$queued = Invoke-RestMethod 'http://127.0.0.1:8188/prompt' -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body))
+$queued.prompt_id
+```
+
+把 `REQUEST_JSON` 和地址换成实际值。记录 `prompt_id`；任务结束后，用该 ID 查 `GET /history/<prompt_id>`。从响应里取该 ID 对应的记录，确认 `status.completed=true`、`status.status_str=success`，从 `outputs` 中的 `SaveVideo` 节点查实际文件。当前图和帧数见[技术约定](../../docs/MOTION-KEYFRAMES.zh-CN.md#共享生成图和时间)。核对原片的实际帧数、分辨率和 24 fps，例如：
+
+```powershell
+ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=width,height,avg_frame_rate,nb_read_frames -of json CANDIDATE.mp4
+```
+
+按项目流程审片，再把选定视频保存为 `LIB/jobs/ActionId/clips/ActionId.mp4`。候选及完整请求分别留档，不能按文件序号猜哪条通过。
+
+## 4. 每条动作：识别、拟合、回传
+
+```powershell
+python tools/keyframe_motion/motion.py read LIB/jobs/ActionId --hf-home DINO_CACHE --execute
+# 审阅抽帧图和叠加视频，确认左右身份和两栏动作时序，再执行 fit。
+python tools/keyframe_motion/motion.py fit LIB/jobs/ActionId --execute
+# 审阅实际使用的点和三维结果后，将动作回传到配套原骨架。
+blender --background original.blend --python-exit-code 1 --python tools/keyframe_motion/blender_keyframes.py -- transfer LIB --motion LIB/jobs/ActionId/out/ActionId.npz --job LIB/jobs/ActionId --out action-on-original.blend
+```
+
+| 入口 | 产物与下一步 |
+| --- | --- |
+| `read` | 动作包的 `work/ActionId/` 下得到 `reader-keyframes.npz`、输入记录、`reader-keyframes-sheet.jpg`、`reader-keyframes-overlay.mp4`。核对峰值与遮挡，空心点提示峰值偏低，不代表位置一定错。 |
+| `fit` | 同目录的 `observations-used.npz` 保存实际使用的点、权重、重投影与两类误差；`out/ActionId.npz` 是处理骨架单位的运动，`out/ActionId.fit.json` 记录拟合依据。输出仍待姿势与动作审阅。 |
+| `transfer` | 写出原骨架上的 Blender Action 和 `.transfer.json`。原骨架源必须配套、可烘焙；动作或源文件不就绪时不能跳过映射。后续编辑、导出和 Unity 验收按 gameart 主流程。 |
+
+固定入口不执行上游 `sync.py` 的两栏时间匹配，也不重估相机。需要辅助定位时，可把固定投影和原始读点传入 `video2rig.check.panel_misses`，查看躯干与肢体在两栏的共同投影方向差异；这不是深度真值，也不检查单栏横向误读。不要直接用原版 `check/run/review` 代替固定入口。
+
+已存在的动作包、观测和结果不会被相应入口覆盖。重做视频并已跑过识别时，为新候选准备独立的动作包 ID，或在明确归属后移出该动作的旧观测与拟合产物，保留有用的失败证据。更换视频、相机、权重、骨架或关键参数时用当前输入重新 `read` 和 `fit`，不能绕过输入指纹检查。
+
+## 5. 对照衔接与本机实例
+
+同一角色的两条动作可先用 `join` 核对共享边界。若使用两份拟合 NPZ，可补查修整前的首尾姿势、相邻帧线速度和角速度：
+
+```powershell
+python tools/keyframe_motion/motion.py join LIB/jobs/FirstAction LIB/jobs/SecondAction
+python tools/keyframe_motion/motion.py join LIB/jobs/FirstAction LIB/jobs/SecondAction --motion-first LIB/jobs/FirstAction/out/FirstAction.npz --motion-second LIB/jobs/SecondAction/out/SecondAction.npz
+```
+
+首尾相同和局部数值报告不能代替成品预览。Blender 修整后，重新按最终 Action 验收两段接缝；`join` 不读取修过的 `.blend`，不生成 FBX 或导入 Unity。
+
+实跑的本地输入与记录在 `work/MedievalGirlKeyframes/`，读 `execution.json` 获取当前候选和证据。`Source/calibration_motion.py` 的 `independent()` 展示了如何从处理骨架的手部目标生成出拳、格挡与交叉遮挡的独立序列。完整样例见 gameart 的 `Animations/MedievalGirlVideoMotion/asset.md`、`delivery.md`；其中 `FinishActions.py` 的修整逻辑只适用于这两条动作。
