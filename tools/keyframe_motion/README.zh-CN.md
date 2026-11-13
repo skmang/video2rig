@@ -71,7 +71,7 @@ python tools/keyframe_motion/motion.py request LIB/jobs/RightPunch
 
 包内 `rig/rig.json` 的 `start_pose` 和物体变换来自实际首姿势，`start/start.png`、`start/end.png`、`start/cameras.json` 与其配套。中间姿势暂不接入；合同含额外字段时会报错，避免写了中间约束却实际没有使用。
 
-视频生成后另存到 `JOB/clips/<动作ID>.mp4`。**准备包不自动复制 reader.pt**：原训练项目当前尚未完成新版 reader 训练；即使以后有权重，换首姿势后的复用也需要检查，而不是仅凭文件存在决定。未准备识别器时不要直接运行原版 `run`，它会进入旧跟踪路线。
+视频生成后另存到 `JOB/clips/<动作ID>.mp4`。**准备包不自动复制 reader.pt**：识别时从角色关联的训练项目读取共享权重，并核对关节标签。换首姿势仍须检查权重与角色、相机及动作姿态是否配套。未准备识别器时不要直接运行原版 `run`，它会进入旧跟踪路线。
 
 若为新起点训练，先保存正确的处理骨架姿势源：
 
@@ -115,7 +115,11 @@ python tools/keyframe_motion/motion.py fit JOB
 
 本入口当前只支持原地动作，关闭行进推算不等于已经锁定根位置。拟合结果仍须检查并修正累计位移、鞋底真实接触、手指、首尾姿势、速度和蒙皮；不自动硬替换端点，也不把局部骨头锁定等同于鞋底无滑动。动态结果只标为 `fitted_not_accepted`。原版 `run/review` 不消费这套固定标定适配，不能用它们重新求解或解释本入口结果；后续使用原骨架 `transfer` 并从 Blender 保存状态制作动态预览。
 
-这些新入口已接线但尚未运行新版训练、推理或真实拟合；实际状态以工作包记录为准。
+### 和上游入口的区别
+
+本 fork 从首发版分出。本地 `fit` 保留逐帧带时间约束的拟合、左右纠错、遮挡侧降权及清理；上游后来在 `fd3ef75` 改为全段联合求解，并通过 `reader/sync.py` 对两栏共有方向的关节轨迹做时序匹配。直接照上游教程运行 `check/run/review` 会进入该版本自己的相机和时间准备，不能当成这里的固定标定结果。
+
+固定相机样例可以将原始识别结果与固定投影传入 `video2rig.check.panel_misses`，分别查看躯干和肢体的差异。这个量只衡量两栏共有方向；侧面横向的错点仍可能改变深度。整段躯干误差低时，也要检查出拳或格挡窗口里的肘、腕和左右身份。
 
 ## 原骨架回传与衔接
 
@@ -137,8 +141,8 @@ python tools/keyframe_motion/motion.py join LIB/jobs/RightPunch LIB/jobs/HighBlo
 
 ## 当前本机样例
 
-本地姿势与角色文件位于 `work/MedievalGirlKeyframes/`，不随 Git 分发。`Source/Guard.blend` 是可编辑护卫姿势源，`poses/GuardLeftReady/frame.png` 为固定相机双视图。此样例用于贯通基础设施，不代表完整动作或游戏验收。本机 ComfyUI 的 Video2Rig 工作流目录只安装共享入口 `Keyframes_Action.json`；直拳和格挡通过各自的 `parameters.json` 与 `prompt.txt` 填入同一图，输入图已配套安装，没有提交生成。
+本地制作状态位于 `work/MedievalGirlKeyframes/execution.json`，原始护卫源在 `Source/Guard.blend`，固定相机双视图在 `poses/GuardLeftReady/frame.png`。两个动作继续复用一套 ComfyUI 图；各自的请求、生成视频、识别和原骨架拟合保留在 `jobs/`。
 
-实际检查记录在该工作包的 `infrastructure-record.json`。角色回传已用保存后重新打开的单姿势验证；新拟合动作的 NPZ 回传分支与跨片动态速度，须在有实际动作后继续验证，不能用静态共享姿势的通过结果替代。
+MedievalGirl 已用角色级 80 点 reader 完成实际直拳和格挡的识别、双视角拟合与原骨架回传。成品修正、FBX、双向衔接预览和 Unity 3001 证据见 gameart 的 `Animations/MedievalGirlVideoMotion/delivery.md`。静态基础设施记录和理想屈肘标定保留各自的检查范围。
 
 创建姿势、动作包、回传文件以及通过 `request --out` 导出的请求均拒绝覆盖已有目标；动作包中的当前参数和提示词可以正常编辑。失败可能留下未完成目录；应先检查具体原因与任务归属，再按正常文件清理规则处理，不用强制重试掩盖失败。
